@@ -3,7 +3,7 @@
 import json
 import time
 from analyzer.llm_client import chat, RateLimitRetryError
-from analyzer.prompts import summary_messages, key_points_messages, topics_messages
+from analyzer.prompts import summary_messages, key_points_messages, topics_messages, qa_messages
 from utils.text_utils import chunk_text
 from utils.config import MAX_CONTENT_CHARS
 
@@ -78,5 +78,27 @@ def analyse_page(content: str, provider: str = "openai", openrouter_model: str |
         "key_points": _parse_json_list(key_points_raw),
         "topics": _parse_json_list(topics_raw),
     }
+
+
+def answer_question(
+    content: str,
+    conversation: list[dict],
+    provider: str = "openai",
+    openrouter_model: str | None = None,
+) -> str:
+    """Answer a user question about *content* given the ongoing *conversation*.
+
+    Args:
+        content:           Cleaned page text (full; will be truncated internally).
+        conversation:      Full chat history as [{"role": ..., "content": ...}, ...].
+        provider:          'openai', 'ollama', or 'openrouter'.
+        openrouter_model:  OpenRouter model ID (used only when provider='openrouter').
+
+    Returns:
+        The assistant's reply as a plain string.
+    """
+    trimmed = _truncate(content)
+    messages = qa_messages(trimmed, conversation)
+    return _chat_with_retry(messages, provider=provider, openrouter_model=openrouter_model).strip()
 
 

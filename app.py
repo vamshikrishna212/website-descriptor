@@ -8,7 +8,7 @@ from ui.components import show_placeholder, show_api_key_warning
 from scraper.fetcher import fetch_html
 from scraper.parser import parse_page
 from scraper.cleaner import build_content
-from analyzer.analysis import analyse_page
+from analyzer.analysis import analyse_page, answer_question
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -324,10 +324,15 @@ with tab_summary:
 # ── Chat Tab ──────────────────────────────────────────────────────────────────
 with tab_chat:
     if st.session_state.current_data:
-        st.markdown("#### 💬 Ask anything about this page")
-        st.caption(
-            f"Chatting about: **{st.session_state.current_data.get('url', '')}**"
-        )
+        col_title, col_clear = st.columns([5, 1])
+        with col_title:
+            st.markdown("#### 💬 Ask anything about this page")
+            st.caption(f"Chatting about: **{st.session_state.current_data.get('url', '')}**")
+        with col_clear:
+            if st.session_state.chat_messages:
+                if st.button("🗑️ Clear", key="clear_chat", help="Clear conversation"):
+                    st.session_state.chat_messages = []
+                    st.rerun()
         st.markdown("---")
 
         # Render conversation history
@@ -338,16 +343,35 @@ with tab_chat:
         # Chat input
         user_input = st.chat_input("Ask a question about this page…")
         if user_input:
+            # Append and show user message immediately
             st.session_state.chat_messages.append({"role": "user", "content": user_input})
             with st.chat_message("user"):
                 st.write(user_input)
-            # Phase 4 will wire in real LLM responses here
-            placeholder_reply = "Conversational Q&A with the LLM will be available in Phase 4."
-            st.session_state.chat_messages.append(
-                {"role": "assistant", "content": placeholder_reply}
+
+            # Call LLM
+            provider = st.session_state.llm_provider
+            openrouter_model = OPENROUTER_MODELS.get(st.session_state.openrouter_model_label)
+            key_missing = (
+                (provider == "openai" and not get_openai_api_key()) or
+                (provider == "openrouter" and not get_openrouter_api_key())
             )
+            if key_missing:
+                reply = f"⚠️ API key for '{provider}' is not configured. Add it to your .env file."
+            else:
+                with st.spinner("Thinking…"):
+                    try:
+                        reply = answer_question(
+                            st.session_state.current_data["raw_text"],
+                            st.session_state.chat_messages,  # includes user msg just appended
+                            provider=provider,
+                            openrouter_model=openrouter_model,
+                        )
+                    except Exception as exc:
+                        reply = f"⚠️ Error: {exc}"
+
+            st.session_state.chat_messages.append({"role": "assistant", "content": reply})
             with st.chat_message("assistant"):
-                st.write(placeholder_reply)
+                st.write(reply)
     else:
         show_placeholder(
             "Chat",

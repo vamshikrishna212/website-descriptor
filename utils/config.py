@@ -34,7 +34,8 @@ OPENROUTER_MODELS: dict[str, str] = {
     "Gemma 4 31B (free)": "google/gemma-4-31b-it:free",
     "Llama 3.3 70B (free)": "meta-llama/llama-3.3-70b-instruct:free",
     "NVIDIA: Nemotron 3 Super (free)": "nvidia/nemotron-3-super-120b-a12b:free",
-    "Liquid 2.5B (free)": "liquid/lfm-2.5-1.2b-instruct:free"
+    "Liquid 2.5B (free)": "liquid/lfm-2.5-1.2b-instruct:free",
+    "Qwen 3 Coder (free)": "qwen/qwen3-coder:free",
 }
 
 
