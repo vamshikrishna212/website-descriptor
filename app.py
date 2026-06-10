@@ -27,8 +27,8 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []    # conversation history
 if "analysis_error" not in st.session_state:
     st.session_state.analysis_error = None
-if "auto_retry" not in st.session_state:
-    st.session_state.auto_retry = True
+if "links_visible" not in st.session_state:
+    st.session_state.links_visible = 20
     st.session_state.llm_provider = "openrouter"
 if "openrouter_model_label" not in st.session_state:
     st.session_state.openrouter_model_label = list(OPENROUTER_MODELS.keys())[0]
@@ -49,6 +49,7 @@ def scrape_url(url: str) -> dict | None:
             "paragraphs": parsed["paragraphs"],
             "links": parsed["links"],
             "images": parsed["images"],
+            "meta": parsed.get("meta", {}),
             "raw_text": raw_text,
             "keywords": [],
             # Populated by run_analysis() after scraping
@@ -208,6 +209,7 @@ if analyze_clicked:
             st.session_state.show_all_kp = False
             st.session_state.show_all_kw = False
             st.session_state.show_all_tp = False
+            st.session_state.links_visible = 20
             # Add to history (avoid duplicates)
             existing_urls = [e["url"] for e in st.session_state.history]
             if data["url"] not in existing_urls:
@@ -396,39 +398,137 @@ with tab_chat:
 with tab_data:
     if st.session_state.current_data:
         data = st.session_state.current_data
-        links = data.get("links", [])
+        links  = data.get("links", [])
         images = data.get("images", [])
+        headings = data.get("headings", [])
+        meta     = data.get("meta", {})
 
-        st.markdown(f"#### 🔗 Links Found on Page — {len(links)} total")
-        if links:
-            import pandas as pd
-            df_links = pd.DataFrame(links, columns=["href", "text", "type"])
-            df_links.columns = ["URL", "Link Text", "Type"]
+        import pandas as pd
 
+        # ── Stats row ─────────────────────────────────────────────────────────
+        n_internal = sum(1 for l in links if l.get("type") == "internal")
+        n_external = len(links) - n_internal
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("🔗 Total Links",    len(links))
+        m2.metric("🏠 Internal",       n_internal)
+        m3.metric("🌐 External",       n_external)
+        m4.metric("🖼️ Images",         len(images))
+        st.markdown("---")
+
+        # ── Links section ─────────────────────────────────────────────────────
+        st.markdown("#### 🔗 Links")
+
+        col_filter, col_search = st.columns([1, 2])
+        with col_filter:
             filter_type = st.radio(
-                "Filter:", ["All", "Internal", "External"],
-                horizontal=True, key="link_filter"
+                "Type", ["All", "Internal", "External"],
+                horizontal=True, key="link_filter",
             )
-            if filter_type != "All":
-                df_links = df_links[df_links["Type"] == filter_type.lower()]
+        with col_search:
+            search_q = st.text_input(
+                "Search", placeholder="Filter by URL or link text…",
+                label_visibility="collapsed", key="link_search",
+            )
 
-            st.dataframe(df_links, use_container_width=True, hide_index=True)
+        if links:
+            df_links = pd.DataFrame(links)          # href, text, type
+            if filter_type != "All":
+                df_links = df_links[df_links["type"] == filter_type.lower()]
+            if search_q:
+                mask = (
+                    df_links["href"].str.contains(search_q, case=False, na=False) |
+                    df_links["text"].str.contains(search_q, case=False, na=False)
+                )
+                df_links = df_links[mask]
+
+            total_filtered = len(df_links)
+            # Reset visible count when filters change
+            visible_n = min(st.session_state.links_visible, total_filtered)
+            df_page = df_links.iloc[:visible_n]
+
+            # Make URLs clickable
+            df_display = df_page.copy()
+            df_display["href"] = df_display["href"].apply(
+                lambda u: f'<a href="{u}" target="_blank">{u}</a>'
+            )
+            df_display.columns = ["URL", "Link Text", "Type"]
+            st.write(
+                df_display.to_html(escape=False, index=False),
+                unsafe_allow_html=True,
+            )
+
+            # ── Show more / show less controls ────────────────────────────────
+            cap_col, btn_col = st.columns([3, 1])
+            with cap_col:
+                st.caption(f"Showing {visible_n} of {total_filtered} links")
+            with btn_col:
+                if visible_n < total_filtered:
+                    if st.button(f"Show 20 more ▼", key="links_more"):
+                        st.session_state.links_visible += 20
+                        st.rerun()
+                elif total_filtered > 20:
+                    if st.button("Show less ▲", key="links_less"):
+                        st.session_state.links_visible = 20
+                        st.rerun()
         else:
             st.caption("_No links found on this page._")
 
         st.markdown("---")
-        st.markdown(f"#### 🖼️ Images Found on Page — {len(images)} total")
+
+        # ── Images section ────────────────────────────────────────────────────
+        st.markdown(f"#### 🖼️ Images — {len(images)} found")
         if images:
-            import pandas as pd
-            df_images = pd.DataFrame(images, columns=["src", "alt"])
-            df_images.columns = ["Image URL", "Alt Text"]
-            st.dataframe(df_images, use_container_width=True, hide_index=True)
+            view_mode = st.radio(
+                "View", ["Grid", "Table"], horizontal=True, key="img_view"
+            )
+            if view_mode == "Grid":
+                cols_per_row = 4
+                for row_start in range(0, len(images), cols_per_row):
+                    row_imgs = images[row_start : row_start + cols_per_row]
+                    cols = st.columns(cols_per_row)
+                    for col, img in zip(cols, row_imgs):
+                        with col:
+                            try:
+                                st.image(img["src"], caption=img["alt"] or "—", use_container_width=True)
+                            except Exception:
+                                st.markdown(
+                                    f'<a href="{img["src"]}" target="_blank">🔗 View image</a>',
+                                    unsafe_allow_html=True,
+                                )
+                                if img["alt"]:
+                                    st.caption(img["alt"])
+            else:
+                df_img = pd.DataFrame(images)
+                df_img["src"] = df_img["src"].apply(
+                    lambda u: f'<a href="{u}" target="_blank">{u}</a>'
+                )
+                df_img.columns = ["Image URL", "Alt Text"]
+                st.write(df_img.to_html(escape=False, index=False), unsafe_allow_html=True)
         else:
             st.caption("_No images found on this page._")
+
+        st.markdown("---")
+
+        # ── Page structure (headings outline) ─────────────────────────────────
+        with st.expander(f"📑 Page Structure — {len(headings)} headings", expanded=False):
+            if headings:
+                for h in headings:
+                    st.markdown(f"- {h}")
+            else:
+                st.caption("_No headings found._")
+
+        # ── Meta tags ─────────────────────────────────────────────────────────
+        with st.expander(f"🏷️ Meta Tags — {len(meta)} found", expanded=False):
+            if meta:
+                df_meta = pd.DataFrame(meta.items(), columns=["Property", "Value"])
+                st.dataframe(df_meta, use_container_width=True, hide_index=True)
+            else:
+                st.caption("_No meta tags found._")
+
     else:
         show_placeholder(
             "Data",
-            "Analyze a URL to see all links and images extracted from the page.",
+            "Analyze a URL to see all links, images, page structure, and meta tags extracted from the page.",
         )
 
 # ── Compare Tab ───────────────────────────────────────────────────────────────
