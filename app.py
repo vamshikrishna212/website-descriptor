@@ -1,9 +1,10 @@
 import streamlit as st
-from utils.config import APP_TITLE, APP_ICON, get_openai_api_key
+from utils.config import APP_TITLE, APP_ICON, get_openai_api_key, get_ollama_base_url, get_ollama_model
 from ui.components import show_placeholder, show_api_key_warning
 from scraper.fetcher import fetch_html
 from scraper.parser import parse_page
 from scraper.cleaner import build_content
+from analyzer.analysis import analyse_page
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -20,8 +21,10 @@ if "current_data" not in st.session_state:
     st.session_state.current_data = None   # analysis result for current URL
 if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []    # conversation history
-if "compare_urls" not in st.session_state:
-    st.session_state.compare_urls = ["", ""]
+if "analysis_error" not in st.session_state:
+    st.session_state.analysis_error = None
+if "llm_provider" not in st.session_state:
+    st.session_state.llm_provider = "ollama"
 
 
 # ── Scrape helper ─────────────────────────────────────────────────────────────
@@ -40,7 +43,7 @@ def scrape_url(url: str) -> dict | None:
             "links": parsed["links"],
             "images": parsed["images"],
             "raw_text": raw_text,
-            # Phase 3 will populate these:
+            # Populated by run_analysis() after scraping
             "summary": None,
             "key_points": [],
             "topics": [],
@@ -56,7 +59,27 @@ def scrape_url(url: str) -> dict | None:
 with st.sidebar:
     st.title(f"{APP_ICON} {APP_TITLE}")
     st.markdown("---")
+    # ── LLM Provider ─────────────────────────────────────────────────────
+    st.subheader("🧠 LLM Provider")
+    provider_choice = st.radio(
+        "Select provider",
+        options=["ollama", "openai"],
+        index=0 if st.session_state.llm_provider == "ollama" else 1,
+        format_func=lambda x: "🧠 Ollama (local)" if x == "ollama" else "☁️ OpenAI",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    st.session_state.llm_provider = provider_choice
 
+    if provider_choice == "ollama":
+        st.caption(f"🟢 Using **{get_ollama_model()}** via `{get_ollama_base_url()}`")
+    else:
+        if get_openai_api_key():
+            st.caption("🟢 OpenAI key loaded.")
+        else:
+            st.caption("🔴 No OpenAI API key found in `.env`.")
+
+    st.markdown("---")
     # ── URL Input & Analyze ───────────────────────────────────────────────────
     st.subheader("🔍 Analyze a Website")
     url_input = st.text_input(
@@ -91,14 +114,18 @@ with st.sidebar:
     else:
         st.caption("No URLs analyzed yet.")
 
-# ── API key check ─────────────────────────────────────────────────────────────
-if not get_openai_api_key():
+# ── API key check (only warn when OpenAI is selected) ─────────────────────────
+if st.session_state.llm_provider == "openai" and not get_openai_api_key():
     show_api_key_warning()
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.header(f"{APP_ICON} {APP_TITLE}")
 st.caption("Enter a URL in the sidebar and click **Analyze** to get started.")
 st.markdown("---")
+
+# Show persistent analysis error if one occurred on the last run
+if st.session_state.get("analysis_error"):
+    st.error(f"**AI analysis failed:** {st.session_state.analysis_error}", icon="🚨")
 
 # ── Handle Analyze button ──────────────────────────────────────────────────────
 if analyze_clicked:
@@ -108,13 +135,35 @@ if analyze_clicked:
         with st.spinner(f"Scraping {url_input} …"):
             data = scrape_url(url_input.strip())
         if data:
+            st.session_state.analysis_error = None
+            # Run LLM analysis
+            provider = st.session_state.llm_provider
+            if provider == "openai" and not get_openai_api_key():
+                st.session_state.analysis_error = "OpenAI API key not set. Add OPENAI_API_KEY to your .env file, or switch to Ollama."
+            else:
+                with st.spinner(f"Running AI analysis via {provider} …"):
+                    try:
+                        analysis = analyse_page(data["raw_text"], provider=provider)
+                        data["summary"] = analysis["summary"]
+                        data["key_points"] = analysis["key_points"]
+                        data["topics"] = analysis["topics"]
+                    except Exception as exc:
+                        st.session_state.analysis_error = str(exc)
             st.session_state.current_data = data
             st.session_state.chat_messages = []
+            st.session_state.show_all_kp = False
+            st.session_state.show_all_kw = False
+            st.session_state.show_all_tp = False
             # Add to history (avoid duplicates)
             existing_urls = [e["url"] for e in st.session_state.history]
             if data["url"] not in existing_urls:
                 st.session_state.history.append({"url": data["url"], "data": data})
-            st.success(f"Scraped **{data['title']}** — {len(data['paragraphs'])} paragraphs, {len(data['links'])} links, {len(data['images'])} images found.")
+            st.success(
+                f"Done! **{data['title']}** — "
+                f"{len(data['paragraphs'])} paragraphs, "
+                f"{len(data['links'])} links, "
+                f"{len(data['images'])} images."
+            )
             st.rerun()
 
 # ── Handle Compare button ──────────────────────────────────────────────────────
@@ -142,33 +191,62 @@ with tab_summary:
             st.markdown("#### 📄 Summary")
             summary = data.get("summary")
             if summary:
-                st.write(summary)
+                # Collapse if longer than 600 chars
+                if len(summary) > 600:
+                    with st.expander("Read summary", expanded=False):
+                        st.write(summary)
+                else:
+                    st.write(summary)
             else:
-                st.caption("_Summary will appear here after LLM analysis (Phase 3)._")
+                st.caption("_No summary yet — make sure your OpenAI API key is set and re-analyze._")
 
             st.markdown("#### ✅ Key Points")
             key_points = data.get("key_points", [])
             if key_points:
-                for point in key_points:
+                # Always show first 4; collapse the rest
+                show_all_kp = st.session_state.get("show_all_kp", False)
+                visible = key_points if show_all_kp else key_points[:4]
+                for point in visible:
                     st.markdown(f"- {point}")
+                if len(key_points) > 4:
+                    label = f"▲ Show less" if show_all_kp else f"▼ Show {len(key_points) - 4} more"
+                    if st.button(label, key="toggle_kp"):
+                        st.session_state.show_all_kp = not show_all_kp
+                        st.rerun()
             else:
-                st.caption("_Key points will appear here after LLM analysis (Phase 3)._")
+                st.caption("_Key points will appear here after LLM analysis._")
 
         with col2:
             st.markdown("#### 🏷️ Keywords")
             keywords = data.get("keywords", [])
             if keywords:
-                st.write(" · ".join(f"`{kw}`" for kw in keywords))
+                # Always show first 8; collapse the rest
+                show_all_kw = st.session_state.get("show_all_kw", False)
+                visible_kw = keywords if show_all_kw else keywords[:8]
+                st.write(" · ".join(f"`{kw}`" for kw in visible_kw))
+                if len(keywords) > 8:
+                    label = "▲ Less" if show_all_kw else f"+{len(keywords) - 8} more"
+                    if st.button(label, key="toggle_kw"):
+                        st.session_state.show_all_kw = not show_all_kw
+                        st.rerun()
             else:
                 st.caption("_Keywords will appear here after Phase 5._")
 
             st.markdown("#### 🌍 Topics")
             topics = data.get("topics", [])
             if topics:
-                for topic in topics:
+                # Always show first 5; collapse the rest
+                show_all_tp = st.session_state.get("show_all_tp", False)
+                visible_tp = topics if show_all_tp else topics[:5]
+                for topic in visible_tp:
                     st.badge(topic)
+                if len(topics) > 5:
+                    label = "▲ Less" if show_all_tp else f"+{len(topics) - 5} more"
+                    if st.button(label, key="toggle_tp"):
+                        st.session_state.show_all_tp = not show_all_tp
+                        st.rerun()
             else:
-                st.caption("_Topics will appear here after Phase 3._")
+                st.caption("_Topics will appear after analysis._")
 
         st.markdown("---")
 

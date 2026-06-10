@@ -156,15 +156,15 @@ website-descriptor/
 
 ---
 
-### Phase 3 — LLM Integration (Summary & Key Points)
+### Phase 3 — LLM Integration (Summary & Key Points) ✅
 > Connect to OpenAI and generate the core analysis.
 
-- [ ] Implement `analyzer/llm_client.py` — OpenAI API wrapper with error handling and token management.
-- [ ] Implement `analyzer/prompts.py` — prompt templates for summary, key points, and topic detection.
-- [ ] Implement `analyzer/analysis.py` — orchestrator that runs prompts against scraped content.
-- [ ] Implement `utils/text_utils.py` — content chunking for large pages.
-- [ ] Update UI Summary tab: display generated summary, key points, and detected topics.
-- [ ] Add loading states while LLM processes.
+- [x] Implement `analyzer/llm_client.py` — OpenAI API wrapper with error handling and token management.
+- [x] Implement `analyzer/prompts.py` — prompt templates for summary, key points, and topic detection.
+- [x] Implement `analyzer/analysis.py` — orchestrator that runs prompts against scraped content.
+- [x] Implement `utils/text_utils.py` — content chunking for large pages.
+- [x] Update UI Summary tab: display generated summary, key points, and detected topics.
+- [x] Add loading states while LLM processes.
 
 **Deliverable:** Enter a URL → get a full AI-generated summary with key points and topics.
 
