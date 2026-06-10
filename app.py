@@ -1,13 +1,13 @@
 import streamlit as st
 from datetime import datetime
 from utils.config import (
-    APP_TITLE, APP_ICON,
+    APP_TITLE, APP_ICON, APP_VERSION,
     get_openai_api_key, get_ollama_base_url, get_ollama_model,
     get_openrouter_api_key, OPENROUTER_MODELS,
 )
-from ui.components import show_placeholder, show_api_key_warning
+from ui.components import show_placeholder, show_api_key_warning, show_scrape_stats
 from ui.export import to_markdown, to_pdf
-from scraper.fetcher import fetch_html
+from scraper.fetcher import fetch_html, validate_url
 from scraper.parser import parse_page
 from scraper.cleaner import build_content
 from analyzer.analysis import analyse_page, answer_question, compare_pages
@@ -49,9 +49,20 @@ if "compare_error" not in st.session_state:
 def scrape_url(url: str) -> dict | None:
     """Fetch, parse, and clean a URL. Returns a data dict or None on failure."""
     try:
+        url = validate_url(url)          # normalise + blocked-domain check
         html = fetch_html(url)
         parsed = parse_page(html, url)
         raw_text = build_content(parsed)
+
+        # Guard: page fetched but contains no usable text
+        if not raw_text or len(raw_text.strip()) < 50:
+            st.warning(
+                f"⚠️ **{url}** was fetched successfully but contains very little text. "
+                "It may be a JavaScript-heavy page or login-gated content. "
+                "AI analysis may be limited.",
+                icon="⚠️",
+            )
+
         return {
             "url": url,
             "title": parsed["title"],
@@ -63,15 +74,14 @@ def scrape_url(url: str) -> dict | None:
             "meta": parsed.get("meta", {}),
             "raw_text": raw_text,
             "keywords": [],
-            # Populated by run_analysis() after scraping
             "summary": None,
             "key_points": [],
             "topics": [],
         }
     except ValueError as exc:
-        st.error(f"Invalid URL: {exc}")
+        st.error(f"🚫 {exc}")
     except Exception as exc:
-        st.error(f"Failed to scrape **{url}**: {exc}")
+        st.error(f"❌ Failed to scrape **{url}**: {exc}")
     return None
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
@@ -201,6 +211,28 @@ with st.sidebar:
     else:
         st.caption("No URLs analyzed yet.")
 
+    # ── Help / About ──────────────────────────────────────────────────────────
+    st.markdown("---")
+    with st.expander("ℹ️ Help & About", expanded=False):
+        st.markdown(f"""
+**{APP_TITLE}** v{APP_VERSION}
+
+Paste any public URL → get an AI-powered summary, key points, topics, keywords, links, and images — all in one place.
+
+**Tips**
+- 🌐 **OpenRouter** free models work well; retry toggle helps on busy models
+- 🧠 **Ollama** runs locally — start with `ollama serve`
+- ⚖️ **Compare** up to 3 URLs side-by-side from the sidebar
+- 📄 Export results as PDF or Markdown from the Summary tab
+- 💬 Chat tab lets you ask follow-up questions about any page
+
+**Limitations**
+- JS-rendered pages (SPAs) may return limited content
+- Some sites (Twitter, LinkedIn) block scraping
+- Free LLM models may be rate-limited
+        """)
+    st.caption(f"v{APP_VERSION} · Built with Streamlit")
+
 # ── API key check ─────────────────────────────────────────────────────────────
 if st.session_state.llm_provider == "openai" and not get_openai_api_key():
     show_api_key_warning()
@@ -229,6 +261,7 @@ if analyze_clicked:
         with st.spinner(f"Scraping {url_input} …"):
             data = scrape_url(url_input.strip())
         if data:
+            show_scrape_stats(data)
             st.session_state.analysis_error = None
             provider = st.session_state.llm_provider
             openrouter_model = OPENROUTER_MODELS.get(st.session_state.openrouter_model_label)
@@ -244,20 +277,25 @@ if analyze_clicked:
                 )
             else:
                 label = st.session_state.openrouter_model_label if provider == "openrouter" else provider
-                with st.spinner(f"Running AI analysis with {label} …"):
-                    try:
-                        analysis = analyse_page(
-                            data["raw_text"],
-                            provider=provider,
-                            openrouter_model=openrouter_model,
-                            auto_retry=st.session_state.auto_retry,
-                        )
-                        data["summary"] = analysis["summary"]
-                        data["key_points"] = analysis["key_points"]
-                        data["topics"] = analysis["topics"]
-                        data["keywords"] = analysis["keywords"]
-                    except Exception as exc:
-                        st.session_state.analysis_error = str(exc)
+                _progress_bar = st.progress(0, text="Starting AI analysis…")
+                def _on_progress(step: int, total: int, lbl: str):
+                    _progress_bar.progress(step / total, text=f"Step {step}/{total} — {lbl}")
+                try:
+                    analysis = analyse_page(
+                        data["raw_text"],
+                        provider=provider,
+                        openrouter_model=openrouter_model,
+                        auto_retry=st.session_state.auto_retry,
+                        progress_callback=_on_progress,
+                    )
+                    _progress_bar.empty()
+                    data["summary"]    = analysis["summary"]
+                    data["key_points"] = analysis["key_points"]
+                    data["topics"]     = analysis["topics"]
+                    data["keywords"]   = analysis["keywords"]
+                except Exception as exc:
+                    _progress_bar.empty()
+                    st.session_state.analysis_error = str(exc)
             st.session_state.current_data = data
             st.session_state.chat_messages = []
             st.session_state.show_all_kp = False
@@ -283,12 +321,7 @@ if analyze_clicked:
                         entry["snippet"] = (data.get("summary") or data.get("description") or "")[:120]
                         entry["data"]    = data
                         break
-            st.success(
-                f"Done! **{data['title']}** — "
-                f"{len(data['paragraphs'])} paragraphs, "
-                f"{len(data['links'])} links, "
-                f"{len(data['images'])} images."
-            )
+            st.toast(f"✅ Analysis complete: **{data.get('title', 'Untitled')}**", icon="🌐")
             st.rerun()
 
 # ── Handle Compare button ──────────────────────────────────────────────────────
@@ -696,3 +729,14 @@ with tab_compare:
             "Compare",
             "Enter 2–3 URLs in the sidebar and click **Compare** to see an AI side-by-side comparison.",
         )
+
+# ── Footer ────────────────────────────────────────────────────────────────────
+st.markdown("---")
+st.markdown(
+    f"<div style='text-align:center; color:#666; font-size:0.8rem;'>"
+    f"{APP_ICON} <b>{APP_TITLE}</b> v{APP_VERSION} &nbsp;·&nbsp; "
+    f"Built with Streamlit &nbsp;·&nbsp; "
+    f"Powered by OpenRouter / Ollama / OpenAI"
+    f"</div>",
+    unsafe_allow_html=True,
+)

@@ -106,5 +106,6 @@ Nous: Hermes 3 405B Instruct
 # ── App-wide constants ────────────────────────────────────────────────────────
 APP_TITLE = "Website Descriptor"
 APP_ICON = "🌐"
+APP_VERSION = "1.0.0"
 MAX_CONTENT_CHARS = 12000  # max chars sent to LLM context
-REQUEST_TIMEOUT = 15       # seconds for HTTP requests
+REQUEST_TIMEOUT = 20       # seconds for HTTP requests

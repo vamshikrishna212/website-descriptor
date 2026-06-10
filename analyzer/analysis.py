@@ -52,27 +52,42 @@ def _parse_json_list(raw: str) -> list[str]:
     return lines
 
 
-def analyse_page(content: str, provider: str = "openai", openrouter_model: str | None = None, auto_retry: bool = True) -> dict:
-    """Run summary, key_points, and topics analysis against *content*.
+def analyse_page(
+    content: str,
+    provider: str = "openai",
+    openrouter_model: str | None = None,
+    auto_retry: bool = True,
+    progress_callback: callable | None = None,
+) -> dict:
+    """Run summary, key_points, topics, and keywords analysis against *content*.
 
     Args:
-        content:           Cleaned page text.
-        provider:          'openai', 'ollama', or 'openrouter'.
-        openrouter_model:  OpenRouter model ID (used only when provider='openrouter').
+        content:             Cleaned page text.
+        provider:            'openai', 'ollama', or 'openrouter'.
+        openrouter_model:    OpenRouter model ID (used only when provider='openrouter').
+        auto_retry:          Whether to auto-retry on 429 rate-limit errors.
+        progress_callback:   Optional callable(step: int, total: int, label: str).
 
-    Returns::
-
-        {
-            "summary":    str,
-            "key_points": list[str],
-            "topics":     list[str],
-        }
+    Returns:
+        {"summary": str, "key_points": list[str], "topics": list[str], "keywords": list[str]}
     """
     trimmed = _truncate(content)
+    total = 4
 
+    def _step(n: int, label: str):
+        if progress_callback:
+            progress_callback(n, total, label)
+
+    _step(1, "Generating summary…")
     summary = _chat_with_retry(summary_messages(trimmed), provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry)
+
+    _step(2, "Extracting key points…")
     key_points_raw = _chat_with_retry(key_points_messages(trimmed), provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry)
+
+    _step(3, "Identifying topics…")
     topics_raw = _chat_with_retry(topics_messages(trimmed), provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry)
+
+    _step(4, "Extracting keywords…")
     keywords_raw = _chat_with_retry(keywords_messages(trimmed), provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry)
 
     return {
