@@ -3,7 +3,7 @@
 import json
 import time
 from analyzer.llm_client import chat, RateLimitRetryError
-from analyzer.prompts import summary_messages, key_points_messages, topics_messages, qa_messages, keywords_messages
+from analyzer.prompts import summary_messages, key_points_messages, topics_messages, qa_messages, keywords_messages, comparison_messages
 from utils.text_utils import chunk_text
 from utils.config import MAX_CONTENT_CHARS
 
@@ -105,4 +105,29 @@ def answer_question(
     messages = qa_messages(trimmed, conversation)
     return _chat_with_retry(messages, provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry).strip()
 
+
+def compare_pages(
+    pages: list[dict],
+    provider: str = "openai",
+    openrouter_model: str | None = None,
+    auto_retry: bool = True,
+) -> str:
+    """Generate an AI comparison of multiple scraped pages.
+
+    Args:
+        pages:             List of data dicts, each with "url" and "raw_text".
+        provider:          'openai', 'ollama', or 'openrouter'.
+        openrouter_model:  OpenRouter model ID (used only when provider='openrouter').
+        auto_retry:        Whether to auto-retry on 429 rate-limit errors.
+
+    Returns:
+        The comparison report as a plain string.
+    """
+    contents = [
+        (p["url"], _truncate(p["raw_text"]))
+        for p in pages
+        if p.get("raw_text")
+    ]
+    messages = comparison_messages(contents)
+    return _chat_with_retry(messages, provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry).strip()
 

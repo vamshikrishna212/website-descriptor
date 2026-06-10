@@ -5,10 +5,11 @@ from utils.config import (
     get_openrouter_api_key, OPENROUTER_MODELS,
 )
 from ui.components import show_placeholder, show_api_key_warning
+from ui.export import to_markdown, to_pdf
 from scraper.fetcher import fetch_html
 from scraper.parser import parse_page
 from scraper.cleaner import build_content
-from analyzer.analysis import analyse_page, answer_question
+from analyzer.analysis import analyse_page, answer_question, compare_pages
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -29,9 +30,18 @@ if "analysis_error" not in st.session_state:
     st.session_state.analysis_error = None
 if "links_visible" not in st.session_state:
     st.session_state.links_visible = 20
+if "llm_provider" not in st.session_state:
     st.session_state.llm_provider = "openrouter"
 if "openrouter_model_label" not in st.session_state:
     st.session_state.openrouter_model_label = list(OPENROUTER_MODELS.keys())[0]
+if "auto_retry" not in st.session_state:
+    st.session_state.auto_retry = True
+if "compare_result" not in st.session_state:
+    st.session_state.compare_result = None   # str: LLM comparison text
+if "compare_pages_data" not in st.session_state:
+    st.session_state.compare_pages_data = [] # list of scraped data dicts
+if "compare_error" not in st.session_state:
+    st.session_state.compare_error = None
 
 
 # ── Scrape helper ─────────────────────────────────────────────────────────────
@@ -224,7 +234,44 @@ if analyze_clicked:
 
 # ── Handle Compare button ──────────────────────────────────────────────────────
 if compare_clicked:
-    st.info("Multi-URL comparison will be available in Phase 8.")
+    urls = [u.strip() for u in [compare_url_1, compare_url_2, compare_url_3] if u.strip()]
+    if len(urls) < 2:
+        st.error("⚠️ Enter at least 2 URLs to compare.")
+    else:
+        provider = st.session_state.llm_provider
+        openrouter_model = OPENROUTER_MODELS.get(st.session_state.openrouter_model_label)
+        key_missing = (
+            (provider == "openai" and not get_openai_api_key()) or
+            (provider == "openrouter" and not get_openrouter_api_key())
+        )
+        if key_missing:
+            st.session_state.compare_error = f"API key for '{provider}' is not set."
+        else:
+            scraped: list[dict] = []
+            st.session_state.compare_error = None
+            st.session_state.compare_result = None
+            for url in urls:
+                with st.spinner(f"Scraping {url} …"):
+                    d = scrape_url(url)
+                if d:
+                    scraped.append(d)
+                else:
+                    st.session_state.compare_error = f"Failed to scrape: {url}"
+                    break
+            if scraped and not st.session_state.compare_error:
+                st.session_state.compare_pages_data = scraped
+                label = st.session_state.openrouter_model_label if provider == "openrouter" else provider
+                with st.spinner(f"Comparing with {label} …"):
+                    try:
+                        st.session_state.compare_result = compare_pages(
+                            scraped,
+                            provider=provider,
+                            openrouter_model=openrouter_model,
+                            auto_retry=st.session_state.auto_retry,
+                        )
+                    except Exception as exc:
+                        st.session_state.compare_error = str(exc)
+        st.rerun()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_summary, tab_chat, tab_data, tab_compare = st.tabs(
@@ -316,25 +363,37 @@ with tab_summary:
             else:
                 st.caption("_Raw content will appear here after scraping (Phase 2)._")
 
-        # Export buttons (Phase 7)
+        # Export buttons
         st.markdown("---")
         ec1, ec2, _ = st.columns([1, 1, 4])
+        _slug = (data.get("title") or "analysis").replace(" ", "_")[:40]
         with ec1:
-            st.button("📄 Export PDF", disabled=True, help="Available in Phase 7")
+            try:
+                pdf_bytes = to_pdf(data)
+                st.download_button(
+                    "📄 Export PDF",
+                    data=pdf_bytes,
+                    file_name=f"{_slug}.pdf",
+                    mime="application/pdf",
+                    use_container_width=True,
+                )
+            except Exception as _e:
+                st.button("📄 Export PDF", disabled=True, help=f"PDF error: {_e}")
         with ec2:
-            st.button("📝 Export Markdown", disabled=True, help="Available in Phase 7")
+            md_str = to_markdown(data)
+            st.download_button(
+                "📝 Export Markdown",
+                data=md_str,
+                file_name=f"{_slug}.md",
+                mime="text/markdown",
+                use_container_width=True,
+            )
 
     else:
         show_placeholder(
             "Summary",
             "Analyze a URL to see the AI-generated summary, key points, topics, and keywords here.",
         )
-        st.markdown("---")
-        ec1, ec2, _ = st.columns([1, 1, 4])
-        with ec1:
-            st.button("📄 Export PDF", disabled=True, help="Available in Phase 7")
-        with ec2:
-            st.button("📝 Export Markdown", disabled=True, help="Available in Phase 7")
 
 # ── Chat Tab ──────────────────────────────────────────────────────────────────
 with tab_chat:
@@ -533,7 +592,48 @@ with tab_data:
 
 # ── Compare Tab ───────────────────────────────────────────────────────────────
 with tab_compare:
-    show_placeholder(
-        "Compare",
-        "Enter multiple URLs in the sidebar and click **Compare** to see a side-by-side AI comparison. Available in Phase 8.",
-    )
+    st.markdown("#### ⚖️ Multi-URL Comparison")
+    st.caption("Enter 2–3 URLs in the sidebar and click **Compare**.")
+    st.markdown("---")
+
+    if st.session_state.compare_error:
+        st.error(f"🚨 {st.session_state.compare_error}")
+
+    if st.session_state.compare_result:
+        pages_data = st.session_state.compare_pages_data
+
+        # ── Per-page stat cards ──────────────────────────────────────────
+        cols = st.columns(len(pages_data))
+        for col, page in zip(cols, pages_data):
+            with col:
+                st.markdown(f"**{page.get('title', 'Untitled')[:50]}**")
+                st.caption(page.get('url', '')[:60])
+                st.markdown(
+                    f"- 📖 {len(page.get('paragraphs', []))} paragraphs  \n"
+                    f"- 🔗 {len(page.get('links', []))} links  \n"
+                    f"- 🖼️ {len(page.get('images', []))} images"
+                )
+        st.markdown("---")
+
+        # ── AI comparison report ────────────────────────────────────────────
+        st.markdown("#### 🧠 AI Comparison Report")
+        st.write(st.session_state.compare_result)
+        st.markdown("---")
+
+        # ── Export comparison ──────────────────────────────────────────────
+        md_lines = ["# Comparison Report\n"]
+        for page in pages_data:
+            md_lines.append(f"- **{page.get('title', 'Untitled')}** — {page.get('url', '')}")
+        md_lines.append(f"\n---\n\n{st.session_state.compare_result}")
+        st.download_button(
+            "📝 Export Comparison as Markdown",
+            data="\n".join(md_lines),
+            file_name="comparison.md",
+            mime="text/markdown",
+        )
+
+    elif not st.session_state.compare_error:
+        show_placeholder(
+            "Compare",
+            "Enter 2–3 URLs in the sidebar and click **Compare** to see an AI side-by-side comparison.",
+        )
