@@ -1,6 +1,9 @@
 import streamlit as st
 from utils.config import APP_TITLE, APP_ICON, get_openai_api_key
 from ui.components import show_placeholder, show_api_key_warning
+from scraper.fetcher import fetch_html
+from scraper.parser import parse_page
+from scraper.cleaner import build_content
 
 # ── Page config ──────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -19,6 +22,35 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []    # conversation history
 if "compare_urls" not in st.session_state:
     st.session_state.compare_urls = ["", ""]
+
+
+# ── Scrape helper ─────────────────────────────────────────────────────────────
+def scrape_url(url: str) -> dict | None:
+    """Fetch, parse, and clean a URL. Returns a data dict or None on failure."""
+    try:
+        html = fetch_html(url)
+        parsed = parse_page(html, url)
+        raw_text = build_content(parsed)
+        return {
+            "url": url,
+            "title": parsed["title"],
+            "description": parsed["description"],
+            "headings": parsed["headings"],
+            "paragraphs": parsed["paragraphs"],
+            "links": parsed["links"],
+            "images": parsed["images"],
+            "raw_text": raw_text,
+            # Phase 3 will populate these:
+            "summary": None,
+            "key_points": [],
+            "topics": [],
+            "keywords": [],
+        }
+    except ValueError as exc:
+        st.error(f"Invalid URL: {exc}")
+    except Exception as exc:
+        st.error(f"Failed to scrape **{url}**: {exc}")
+    return None
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -73,10 +105,17 @@ if analyze_clicked:
     if not url_input.strip():
         st.error("Please enter a URL before clicking Analyze.")
     else:
-        # Phase 2 will replace this block with real scraping
-        with st.spinner("Scraping website… (coming in Phase 2)"):
-            pass
-        st.info("Scraping and analysis will be wired up in Phase 2. For now, the UI shell is complete.")
+        with st.spinner(f"Scraping {url_input} …"):
+            data = scrape_url(url_input.strip())
+        if data:
+            st.session_state.current_data = data
+            st.session_state.chat_messages = []
+            # Add to history (avoid duplicates)
+            existing_urls = [e["url"] for e in st.session_state.history]
+            if data["url"] not in existing_urls:
+                st.session_state.history.append({"url": data["url"], "data": data})
+            st.success(f"Scraped **{data['title']}** — {len(data['paragraphs'])} paragraphs, {len(data['links'])} links, {len(data['images'])} images found.")
+            st.rerun()
 
 # ── Handle Compare button ──────────────────────────────────────────────────────
 if compare_clicked:
@@ -134,10 +173,12 @@ with tab_summary:
         st.markdown("---")
 
         # Raw content expander
-        with st.expander("📃 Raw Cleaned Content", expanded=False):
-            raw = data.get("raw_text", "")
+        st.markdown("---")
+        raw = data.get("raw_text", "")
+        char_count = len(raw)
+        with st.expander(f"📃 Raw Cleaned Content ({char_count:,} chars)", expanded=bool(raw)):
             if raw:
-                st.text_area("", raw, height=300, disabled=True)
+                st.text_area("", raw, height=300, disabled=True, label_visibility="collapsed")
             else:
                 st.caption("_Raw content will appear here after scraping (Phase 2)._")
 
@@ -201,21 +242,32 @@ with tab_data:
         links = data.get("links", [])
         images = data.get("images", [])
 
-        st.markdown("#### 🔗 Links Found on Page")
+        st.markdown(f"#### 🔗 Links Found on Page — {len(links)} total")
         if links:
             import pandas as pd
-            df_links = pd.DataFrame(links)
-            st.dataframe(df_links, use_container_width=True)
+            df_links = pd.DataFrame(links, columns=["href", "text", "type"])
+            df_links.columns = ["URL", "Link Text", "Type"]
+
+            filter_type = st.radio(
+                "Filter:", ["All", "Internal", "External"],
+                horizontal=True, key="link_filter"
+            )
+            if filter_type != "All":
+                df_links = df_links[df_links["Type"] == filter_type.lower()]
+
+            st.dataframe(df_links, use_container_width=True, hide_index=True)
         else:
-            st.caption("_Links will be extracted and listed here after Phase 6._")
+            st.caption("_No links found on this page._")
 
         st.markdown("---")
-        st.markdown("#### 🖼️ Images Found on Page")
+        st.markdown(f"#### 🖼️ Images Found on Page — {len(images)} total")
         if images:
-            for img in images:
-                st.markdown(f"- **{img.get('alt', '(no alt)')}** — `{img.get('src', '')}`")
+            import pandas as pd
+            df_images = pd.DataFrame(images, columns=["src", "alt"])
+            df_images.columns = ["Image URL", "Alt Text"]
+            st.dataframe(df_images, use_container_width=True, hide_index=True)
         else:
-            st.caption("_Images will be listed here after Phase 6._")
+            st.caption("_No images found on this page._")
     else:
         show_placeholder(
             "Data",

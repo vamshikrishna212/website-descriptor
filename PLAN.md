@@ -142,15 +142,15 @@ website-descriptor/
 
 ---
 
-### Phase 2 — Website Scraping & Raw Content Display
+### Phase 2 — Website Scraping & Raw Content Display ✅
 > Scrape a URL and display the raw cleaned content in the UI.
 
-- [ ] Implement `scraper/fetcher.py` — fetch HTML via `requests` with proper headers and error handling.
-- [ ] Implement `scraper/parser.py` — extract title, headings, paragraphs, links, images, meta tags using BeautifulSoup.
-- [ ] Implement `scraper/cleaner.py` — strip boilerplate, clean whitespace, handle encoding.
-- [ ] Update UI: wire the **Analyze** button to trigger scraping.
-- [ ] Display the cleaned raw content in a "Raw Content" expander in the Summary tab.
-- [ ] Add loading spinner and error messages for failed URLs.
+- [x] Implement `scraper/fetcher.py` — fetch HTML via `requests` with proper headers and error handling.
+- [x] Implement `scraper/parser.py` — extract title, headings, paragraphs, links, images, meta tags using BeautifulSoup.
+- [x] Implement `scraper/cleaner.py` — strip boilerplate, clean whitespace, handle encoding.
+- [x] Update UI: wire the **Analyze** button to trigger scraping.
+- [x] Display the cleaned raw content in a "Raw Content" expander in the Summary tab.
+- [x] Add loading spinner and error messages for failed URLs.
 
 **Deliverable:** Enter a URL → click Analyze → see cleaned text content in the app.
 

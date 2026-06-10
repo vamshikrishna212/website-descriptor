@@ -1,17 +1,106 @@
-"""Placeholder — implemented in Phase 2."""
+"""Parse raw HTML into structured content using BeautifulSoup."""
+
+from urllib.parse import urljoin, urlparse
+from bs4 import BeautifulSoup
+
+
+# Tags whose entire subtree we drop before extracting text
+_NOISE_TAGS = [
+    "script", "style", "noscript", "iframe", "nav", "footer",
+    "header", "aside", "form", "button", "svg", "figure",
+    "advertisement", "ads",
+]
 
 
 def parse_page(html: str, url: str) -> dict:
-    """Parse HTML and return structured content dict.
+    """Parse *html* and return a structured content dict.
 
-    Returns:
+    Returns::
+
         {
-            "title": str,
-            "headings": list[str],
+            "title":      str,
+            "description": str,
+            "headings":   list[str],
             "paragraphs": list[str],
-            "links": list[{"href": str, "text": str, "type": str}],
-            "images": list[{"src": str, "alt": str}],
-            "meta": dict,
+            "links":      list[{"href": str, "text": str, "type": str}],
+            "images":     list[{"src": str, "alt": str}],
+            "meta":       dict[str, str],
         }
     """
-    raise NotImplementedError("Phase 2")
+    soup = BeautifulSoup(html, "lxml")
+    base_domain = urlparse(url).netloc
+
+    # ── Meta ──────────────────────────────────────────────────────────────────
+    meta: dict[str, str] = {}
+    for tag in soup.find_all("meta"):
+        name = tag.get("name") or tag.get("property") or ""
+        content = tag.get("content") or ""
+        if name and content:
+            meta[name.lower()] = content
+
+    # ── Title ─────────────────────────────────────────────────────────────────
+    title_tag = soup.find("title")
+    title = title_tag.get_text(strip=True) if title_tag else meta.get("og:title", "Untitled")
+
+    description = (
+        meta.get("description")
+        or meta.get("og:description")
+        or ""
+    )
+
+    # ── Remove noise before text extraction ───────────────────────────────────
+    for tag in soup.find_all(_NOISE_TAGS):
+        tag.decompose()
+
+    # ── Headings ─────────────────────────────────────────────────────────────
+    headings: list[str] = []
+    for h in soup.find_all(["h1", "h2", "h3", "h4"]):
+        text = h.get_text(separator=" ", strip=True)
+        if text:
+            headings.append(text)
+
+    # ── Paragraphs ────────────────────────────────────────────────────────────
+    paragraphs: list[str] = []
+    for p in soup.find_all("p"):
+        text = p.get_text(separator=" ", strip=True)
+        if len(text) > 40:          # skip very short / decorative fragments
+            paragraphs.append(text)
+
+    # ── Links ─────────────────────────────────────────────────────────────────
+    links: list[dict] = []
+    seen_hrefs: set[str] = set()
+    for a in soup.find_all("a", href=True):
+        href = a["href"].strip()
+        if not href or href.startswith(("#", "javascript:", "mailto:")):
+            continue
+        absolute = urljoin(url, href)
+        if absolute in seen_hrefs:
+            continue
+        seen_hrefs.add(absolute)
+        link_domain = urlparse(absolute).netloc
+        link_type = "internal" if link_domain == base_domain else "external"
+        text = a.get_text(separator=" ", strip=True) or absolute
+        links.append({"href": absolute, "text": text[:120], "type": link_type})
+
+    # ── Images ────────────────────────────────────────────────────────────────
+    images: list[dict] = []
+    seen_srcs: set[str] = set()
+    for img in soup.find_all("img"):
+        src = img.get("src") or img.get("data-src") or ""
+        if not src or src in seen_srcs:
+            continue
+        seen_srcs.add(src)
+        absolute_src = urljoin(url, src)
+        alt = img.get("alt", "").strip()
+        images.append({"src": absolute_src, "alt": alt})
+
+    return {
+        "title": title,
+        "description": description,
+        "headings": headings,
+        "paragraphs": paragraphs,
+        "links": links,
+        "images": images,
+        "meta": meta,
+    }
+
