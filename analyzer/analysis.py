@@ -1,10 +1,29 @@
 """Orchestrates all LLM analysis tasks against scraped page content."""
 
 import json
-from analyzer.llm_client import chat
+import time
+from analyzer.llm_client import chat, RateLimitRetryError
 from analyzer.prompts import summary_messages, key_points_messages, topics_messages
 from utils.text_utils import chunk_text
 from utils.config import MAX_CONTENT_CHARS
+
+_MAX_RETRIES = 3
+
+
+def _chat_with_retry(
+    messages: list[dict],
+    provider: str,
+    openrouter_model: str | None,
+) -> str:
+    """Call chat(), automatically waiting and retrying on 429 rate-limit errors."""
+    for attempt in range(1, _MAX_RETRIES + 1):
+        try:
+            return chat(messages, provider=provider, openrouter_model=openrouter_model)
+        except RateLimitRetryError as exc:
+            if attempt == _MAX_RETRIES:
+                raise exc.original
+            time.sleep(exc.wait_seconds)
+    return ""  # unreachable
 
 
 def _truncate(content: str) -> str:
@@ -32,12 +51,13 @@ def _parse_json_list(raw: str) -> list[str]:
     return lines
 
 
-def analyse_page(content: str, provider: str = "openai") -> dict:
+def analyse_page(content: str, provider: str = "openai", openrouter_model: str | None = None) -> dict:
     """Run summary, key_points, and topics analysis against *content*.
 
     Args:
-        content:  Cleaned page text.
-        provider: 'openai' or 'ollama'.
+        content:           Cleaned page text.
+        provider:          'openai', 'ollama', or 'openrouter'.
+        openrouter_model:  OpenRouter model ID (used only when provider='openrouter').
 
     Returns::
 
@@ -49,9 +69,9 @@ def analyse_page(content: str, provider: str = "openai") -> dict:
     """
     trimmed = _truncate(content)
 
-    summary = chat(summary_messages(trimmed), provider=provider)
-    key_points_raw = chat(key_points_messages(trimmed), provider=provider)
-    topics_raw = chat(topics_messages(trimmed), provider=provider)
+    summary = _chat_with_retry(summary_messages(trimmed), provider=provider, openrouter_model=openrouter_model)
+    key_points_raw = _chat_with_retry(key_points_messages(trimmed), provider=provider, openrouter_model=openrouter_model)
+    topics_raw = _chat_with_retry(topics_messages(trimmed), provider=provider, openrouter_model=openrouter_model)
 
     return {
         "summary": summary.strip(),

@@ -1,5 +1,9 @@
 import streamlit as st
-from utils.config import APP_TITLE, APP_ICON, get_openai_api_key, get_ollama_base_url, get_ollama_model
+from utils.config import (
+    APP_TITLE, APP_ICON,
+    get_openai_api_key, get_ollama_base_url, get_ollama_model,
+    get_openrouter_api_key, OPENROUTER_MODELS,
+)
 from ui.components import show_placeholder, show_api_key_warning
 from scraper.fetcher import fetch_html
 from scraper.parser import parse_page
@@ -24,7 +28,9 @@ if "chat_messages" not in st.session_state:
 if "analysis_error" not in st.session_state:
     st.session_state.analysis_error = None
 if "llm_provider" not in st.session_state:
-    st.session_state.llm_provider = "ollama"
+    st.session_state.llm_provider = "openrouter"
+if "openrouter_model_label" not in st.session_state:
+    st.session_state.openrouter_model_label = list(OPENROUTER_MODELS.keys())[0]
 
 
 # ── Scrape helper ─────────────────────────────────────────────────────────────
@@ -63,21 +69,36 @@ with st.sidebar:
     st.subheader("🧠 LLM Provider")
     provider_choice = st.radio(
         "Select provider",
-        options=["ollama", "openai"],
-        index=0 if st.session_state.llm_provider == "ollama" else 1,
-        format_func=lambda x: "🧠 Ollama (local)" if x == "ollama" else "☁️ OpenAI",
-        horizontal=True,
+        options=["openrouter", "ollama", "openai"],
+        index=["openrouter", "ollama", "openai"].index(st.session_state.llm_provider),
+        format_func=lambda x: {
+            "openrouter": "🌐 OpenRouter",
+            "ollama": "🧠 Ollama (local)",
+            "openai": "☁️ OpenAI",
+        }[x],
         label_visibility="collapsed",
     )
     st.session_state.llm_provider = provider_choice
 
-    if provider_choice == "ollama":
+    if provider_choice == "openrouter":
+        model_label = st.selectbox(
+            "Model",
+            options=list(OPENROUTER_MODELS.keys()),
+            index=list(OPENROUTER_MODELS.keys()).index(st.session_state.openrouter_model_label),
+            label_visibility="collapsed",
+        )
+        st.session_state.openrouter_model_label = model_label
+        if get_openrouter_api_key():
+            st.caption(f"🟢 **{model_label}** via OpenRouter")
+        else:
+            st.caption("🔴 No `OPENROUTER_API_KEY` in `.env`. Get one free at openrouter.ai")
+    elif provider_choice == "ollama":
         st.caption(f"🟢 Using **{get_ollama_model()}** via `{get_ollama_base_url()}`")
     else:
         if get_openai_api_key():
             st.caption("🟢 OpenAI key loaded.")
         else:
-            st.caption("🔴 No OpenAI API key found in `.env`.")
+            st.caption("🔴 No `OPENAI_API_KEY` found in `.env`.")
 
     st.markdown("---")
     # ── URL Input & Analyze ───────────────────────────────────────────────────
@@ -114,9 +135,16 @@ with st.sidebar:
     else:
         st.caption("No URLs analyzed yet.")
 
-# ── API key check (only warn when OpenAI is selected) ─────────────────────────
+# ── API key check ─────────────────────────────────────────────────────────────
 if st.session_state.llm_provider == "openai" and not get_openai_api_key():
     show_api_key_warning()
+elif st.session_state.llm_provider == "openrouter" and not get_openrouter_api_key():
+    st.warning(
+        "**OpenRouter API key not configured.**  \n"
+        "Create a `.env` file with `OPENROUTER_API_KEY=your-key`. "
+        "Get a free key at [openrouter.ai](https://openrouter.ai).",
+        icon="⚠️",
+    )
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.header(f"{APP_ICON} {APP_TITLE}")
@@ -136,14 +164,27 @@ if analyze_clicked:
             data = scrape_url(url_input.strip())
         if data:
             st.session_state.analysis_error = None
-            # Run LLM analysis
             provider = st.session_state.llm_provider
-            if provider == "openai" and not get_openai_api_key():
-                st.session_state.analysis_error = "OpenAI API key not set. Add OPENAI_API_KEY to your .env file, or switch to Ollama."
+            openrouter_model = OPENROUTER_MODELS.get(st.session_state.openrouter_model_label)
+
+            # Guard: check required keys before calling LLM
+            key_missing = (
+                (provider == "openai" and not get_openai_api_key()) or
+                (provider == "openrouter" and not get_openrouter_api_key())
+            )
+            if key_missing:
+                st.session_state.analysis_error = (
+                    f"API key for '{provider}' is not set. Add it to your .env file."
+                )
             else:
-                with st.spinner(f"Running AI analysis via {provider} …"):
+                label = st.session_state.openrouter_model_label if provider == "openrouter" else provider
+                with st.spinner(f"Running AI analysis with {label} …"):
                     try:
-                        analysis = analyse_page(data["raw_text"], provider=provider)
+                        analysis = analyse_page(
+                            data["raw_text"],
+                            provider=provider,
+                            openrouter_model=openrouter_model,
+                        )
                         data["summary"] = analysis["summary"]
                         data["key_points"] = analysis["key_points"]
                         data["topics"] = analysis["topics"]
