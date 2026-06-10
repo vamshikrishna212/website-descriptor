@@ -1,4 +1,5 @@
 import streamlit as st
+from datetime import datetime
 from utils.config import (
     APP_TITLE, APP_ICON,
     get_openai_api_key, get_ollama_base_url, get_ollama_model,
@@ -144,15 +145,58 @@ with st.sidebar:
     st.markdown("---")
 
     # ── Session History ───────────────────────────────────────────────────────
-    st.subheader("📋 History")
+    st.subheader(f"📋 History ({len(st.session_state.history)})")
     if st.session_state.history:
-        for i, entry in enumerate(reversed(st.session_state.history)):
-            display = entry["url"][:40] + "…" if len(entry["url"]) > 40 else entry["url"]
-            if st.button(display, key=f"hist_{i}", use_container_width=True):
-                st.session_state.current_data = entry["data"]
-                st.session_state.chat_messages = []
-        if st.button("🗑️ Clear History", use_container_width=True):
+        hist_search = st.text_input(
+            "Search history",
+            placeholder="Filter by title or URL…",
+            label_visibility="collapsed",
+            key="hist_search",
+        )
+        # Show newest first
+        filtered_hist = list(reversed(st.session_state.history))
+        if hist_search:
+            q = hist_search.lower()
+            filtered_hist = [
+                e for e in filtered_hist
+                if q in e["url"].lower() or q in e.get("title", "").lower()
+            ]
+
+        for i, entry in enumerate(filtered_hist):
+            title   = entry.get("title", "Untitled")[:32]
+            ts      = entry.get("ts", "")
+            snippet = entry.get("snippet", "")
+            is_active = (
+                st.session_state.current_data is not None
+                and st.session_state.current_data.get("url") == entry["url"]
+            )
+
+            with st.container():
+                label = f"{'\u25b6 ' if is_active else ''}{title}"
+                col_btn, col_del = st.columns([5, 1])
+                with col_btn:
+                    if st.button(label, key=f"hist_load_{i}", use_container_width=True,
+                                 type="primary" if is_active else "secondary"):
+                        st.session_state.current_data  = entry["data"]
+                        st.session_state.chat_messages = []
+                        st.session_state.links_visible = 20
+                        st.rerun()
+                with col_del:
+                    if st.button("❌", key=f"hist_del_{i}", help="Remove from history"):
+                        real_idx = st.session_state.history.index(entry)
+                        st.session_state.history.pop(real_idx)
+                        if is_active:
+                            st.session_state.current_data = None
+                        st.rerun()
+                if ts:
+                    st.caption(f"🕒 {ts}")
+                if snippet:
+                    st.caption(snippet[:80] + ("…" if len(snippet) > 80 else ""))
+
+        st.markdown("")
+        if st.button("🗑️ Clear All History", use_container_width=True):
             st.session_state.history = []
+            st.session_state.current_data = None
             st.rerun()
     else:
         st.caption("No URLs analyzed yet.")
@@ -223,7 +267,22 @@ if analyze_clicked:
             # Add to history (avoid duplicates)
             existing_urls = [e["url"] for e in st.session_state.history]
             if data["url"] not in existing_urls:
-                st.session_state.history.append({"url": data["url"], "data": data})
+                st.session_state.history.append({
+                    "url":      data["url"],
+                    "title":    data.get("title", "Untitled"),
+                    "ts":       datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "snippet":  (data.get("summary") or data.get("description") or "")[:120],
+                    "data":     data,
+                })
+            else:
+                # Update existing entry in place with fresh data
+                for entry in st.session_state.history:
+                    if entry["url"] == data["url"]:
+                        entry["title"]   = data.get("title", "Untitled")
+                        entry["ts"]      = datetime.now().strftime("%Y-%m-%d %H:%M")
+                        entry["snippet"] = (data.get("summary") or data.get("description") or "")[:120]
+                        entry["data"]    = data
+                        break
             st.success(
                 f"Done! **{data['title']}** — "
                 f"{len(data['paragraphs'])} paragraphs, "
