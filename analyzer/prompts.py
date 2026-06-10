@@ -43,6 +43,21 @@ def topics_messages(content: str) -> list[dict]:
     ]
 
 
+def keywords_messages(content: str) -> list[dict]:
+    return [
+        {
+            "role": "system",
+            "content": (
+                "You are an expert at keyword extraction. "
+                "Return ONLY a JSON array of the most important keywords and short keyphrases (1–3 words each) from the content. "
+                "Focus on domain-specific terms, proper nouns, and concepts — not generic words. "
+                "Aim for 10–20 keywords. No markdown, no extra text, just the JSON array."
+            ),
+        },
+        {"role": "user", "content": f"Extract keywords from:\n\n{content}"},
+    ]
+
+
 def qa_messages(content: str, conversation: list[dict]) -> list[dict]:
     """Build the full message list for conversational Q&A (Phase 4)."""
     system = {

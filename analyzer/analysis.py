@@ -3,7 +3,7 @@
 import json
 import time
 from analyzer.llm_client import chat, RateLimitRetryError
-from analyzer.prompts import summary_messages, key_points_messages, topics_messages, qa_messages
+from analyzer.prompts import summary_messages, key_points_messages, topics_messages, qa_messages, keywords_messages
 from utils.text_utils import chunk_text
 from utils.config import MAX_CONTENT_CHARS
 
@@ -14,13 +14,14 @@ def _chat_with_retry(
     messages: list[dict],
     provider: str,
     openrouter_model: str | None,
+    auto_retry: bool = True,
 ) -> str:
     """Call chat(), automatically waiting and retrying on 429 rate-limit errors."""
     for attempt in range(1, _MAX_RETRIES + 1):
         try:
             return chat(messages, provider=provider, openrouter_model=openrouter_model)
         except RateLimitRetryError as exc:
-            if attempt == _MAX_RETRIES:
+            if not auto_retry or attempt == _MAX_RETRIES:
                 raise exc.original
             time.sleep(exc.wait_seconds)
     return ""  # unreachable
@@ -51,7 +52,7 @@ def _parse_json_list(raw: str) -> list[str]:
     return lines
 
 
-def analyse_page(content: str, provider: str = "openai", openrouter_model: str | None = None) -> dict:
+def analyse_page(content: str, provider: str = "openai", openrouter_model: str | None = None, auto_retry: bool = True) -> dict:
     """Run summary, key_points, and topics analysis against *content*.
 
     Args:
@@ -69,14 +70,16 @@ def analyse_page(content: str, provider: str = "openai", openrouter_model: str |
     """
     trimmed = _truncate(content)
 
-    summary = _chat_with_retry(summary_messages(trimmed), provider=provider, openrouter_model=openrouter_model)
-    key_points_raw = _chat_with_retry(key_points_messages(trimmed), provider=provider, openrouter_model=openrouter_model)
-    topics_raw = _chat_with_retry(topics_messages(trimmed), provider=provider, openrouter_model=openrouter_model)
+    summary = _chat_with_retry(summary_messages(trimmed), provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry)
+    key_points_raw = _chat_with_retry(key_points_messages(trimmed), provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry)
+    topics_raw = _chat_with_retry(topics_messages(trimmed), provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry)
+    keywords_raw = _chat_with_retry(keywords_messages(trimmed), provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry)
 
     return {
         "summary": summary.strip(),
         "key_points": _parse_json_list(key_points_raw),
         "topics": _parse_json_list(topics_raw),
+        "keywords": _parse_json_list(keywords_raw),
     }
 
 
@@ -85,6 +88,7 @@ def answer_question(
     conversation: list[dict],
     provider: str = "openai",
     openrouter_model: str | None = None,
+    auto_retry: bool = True,
 ) -> str:
     """Answer a user question about *content* given the ongoing *conversation*.
 
@@ -99,6 +103,6 @@ def answer_question(
     """
     trimmed = _truncate(content)
     messages = qa_messages(trimmed, conversation)
-    return _chat_with_retry(messages, provider=provider, openrouter_model=openrouter_model).strip()
+    return _chat_with_retry(messages, provider=provider, openrouter_model=openrouter_model, auto_retry=auto_retry).strip()
 
 

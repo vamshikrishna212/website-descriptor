@@ -27,7 +27,8 @@ if "chat_messages" not in st.session_state:
     st.session_state.chat_messages = []    # conversation history
 if "analysis_error" not in st.session_state:
     st.session_state.analysis_error = None
-if "llm_provider" not in st.session_state:
+if "auto_retry" not in st.session_state:
+    st.session_state.auto_retry = True
     st.session_state.llm_provider = "openrouter"
 if "openrouter_model_label" not in st.session_state:
     st.session_state.openrouter_model_label = list(OPENROUTER_MODELS.keys())[0]
@@ -49,11 +50,11 @@ def scrape_url(url: str) -> dict | None:
             "links": parsed["links"],
             "images": parsed["images"],
             "raw_text": raw_text,
+            "keywords": [],
             # Populated by run_analysis() after scraping
             "summary": None,
             "key_points": [],
             "topics": [],
-            "keywords": [],
         }
     except ValueError as exc:
         st.error(f"Invalid URL: {exc}")
@@ -81,10 +82,13 @@ with st.sidebar:
     st.session_state.llm_provider = provider_choice
 
     if provider_choice == "openrouter":
+        _model_keys = list(OPENROUTER_MODELS.keys())
+        _saved_label = st.session_state.openrouter_model_label
+        _model_index = _model_keys.index(_saved_label) if _saved_label in _model_keys else 0
         model_label = st.selectbox(
             "Model",
-            options=list(OPENROUTER_MODELS.keys()),
-            index=list(OPENROUTER_MODELS.keys()).index(st.session_state.openrouter_model_label),
+            options=_model_keys,
+            index=_model_index,
             label_visibility="collapsed",
         )
         st.session_state.openrouter_model_label = model_label
@@ -99,6 +103,13 @@ with st.sidebar:
             st.caption("🟢 OpenAI key loaded.")
         else:
             st.caption("🔴 No `OPENAI_API_KEY` found in `.env`.")
+
+    st.markdown("---")
+    st.session_state.auto_retry = st.toggle(
+        "Auto-retry on rate limit",
+        value=st.session_state.auto_retry,
+        help="When enabled, automatically waits and retries up to 3× on 429 rate-limit errors.",
+    )
 
     st.markdown("---")
     # ── URL Input & Analyze ───────────────────────────────────────────────────
@@ -184,10 +195,12 @@ if analyze_clicked:
                             data["raw_text"],
                             provider=provider,
                             openrouter_model=openrouter_model,
+                            auto_retry=st.session_state.auto_retry,
                         )
                         data["summary"] = analysis["summary"]
                         data["key_points"] = analysis["key_points"]
                         data["topics"] = analysis["topics"]
+                        data["keywords"] = analysis["keywords"]
                     except Exception as exc:
                         st.session_state.analysis_error = str(exc)
             st.session_state.current_data = data
@@ -271,7 +284,7 @@ with tab_summary:
                         st.session_state.show_all_kw = not show_all_kw
                         st.rerun()
             else:
-                st.caption("_Keywords will appear here after Phase 5._")
+                st.caption("_No significant keywords found on this page._")
 
             st.markdown("#### 🌍 Topics")
             topics = data.get("topics", [])
@@ -362,9 +375,10 @@ with tab_chat:
                     try:
                         reply = answer_question(
                             st.session_state.current_data["raw_text"],
-                            st.session_state.chat_messages,  # includes user msg just appended
+                            st.session_state.chat_messages,
                             provider=provider,
                             openrouter_model=openrouter_model,
+                            auto_retry=st.session_state.auto_retry,
                         )
                     except Exception as exc:
                         reply = f"⚠️ Error: {exc}"
