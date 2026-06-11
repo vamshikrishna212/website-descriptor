@@ -31,12 +31,12 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 
 # Available free/affordable models on OpenRouter shown in the UI
 OPENROUTER_MODELS: dict[str, str] = {
+    "Open AI gpt-oss-120b": "openai/gpt-oss-120b:free",
     "Gemma 4 31B": "google/gemma-4-31b-it:free",
     "Llama 3.3 70B": "meta-llama/llama-3.3-70b-instruct:free",
     "Nous: Hermes 3 405B Instruct": "nousresearch/hermes-3-llama-3.1-405b:free",
     "Liquid 2.5B": "liquid/lfm-2.5-1.2b-instruct:free",
     "Qwen 3 Coder": "qwen/qwen3-coder:free",
-    "Open AI gpt-oss-120b": "openai/gpt-oss-120b:free",
 }
 
 
