@@ -7,7 +7,7 @@ from bs4 import BeautifulSoup
 # Tags whose entire subtree we drop before extracting text
 _NOISE_TAGS = [
     "script", "style", "noscript", "iframe", "nav", "footer",
-    "header", "aside", "form", "button", "svg", "figure",
+    "header", "aside", "form", "button", "svg",
     "advertisement", "ads",
 ]
 
@@ -66,6 +66,28 @@ def parse_page(html: str, url: str) -> dict:
         if len(text) > 40:          # skip very short / decorative fragments
             paragraphs.append(text)
 
+    # ── List items ────────────────────────────────────────────────────────────
+    # Collect top-level <ul>/<ol> blocks (skip lists nested inside another list
+    # to avoid duplicating items already captured by the parent)
+    list_groups: list[list[str]] = []
+    for lst in soup.find_all(["ul", "ol"]):
+        if lst.parent and lst.parent.name in ("ul", "ol", "li"):
+            continue  # nested list — parent already handles it
+        items = []
+        for li in lst.find_all("li"):
+            text = li.get_text(separator=" ", strip=True)
+            if text and len(text) > 3:
+                items.append(text)
+        if len(items) >= 2:  # ignore trivially small lists (nav remnants etc.)
+            list_groups.append(items)
+
+    # ── Code blocks ───────────────────────────────────────────────────────────
+    code_blocks: list[str] = []
+    for pre in soup.find_all("pre"):
+        text = pre.get_text(separator="\n", strip=True)
+        if text and len(text) > 10:
+            code_blocks.append(text)
+
     # ── Links ─────────────────────────────────────────────────────────────────
     links: list[dict] = []
     seen_hrefs: set[str] = set()
@@ -99,6 +121,8 @@ def parse_page(html: str, url: str) -> dict:
         "description": description,
         "headings": headings,
         "paragraphs": paragraphs,
+        "list_groups": list_groups,
+        "code_blocks": code_blocks,
         "links": links,
         "images": images,
         "meta": meta,

@@ -16,7 +16,7 @@ _HEADERS = {
     ),
     "Accept-Language": "en-US,en;q=0.9",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Encoding": "gzip, deflate, br",
+    "Accept-Encoding": "gzip, deflate",
     "DNT": "1",
 }
 
@@ -98,9 +98,47 @@ def fetch_html(url: str, timeout: int = REQUEST_TIMEOUT) -> str:
             f"HTTP {code} error fetching **{url}**."
         )
 
-    # Respect charset from the response; fall back to apparent encoding
-    if response.encoding is None or response.encoding.lower() == "iso-8859-1":
-        response.encoding = response.apparent_encoding or "utf-8"
+    # ── Content-type guard ────────────────────────────────────────────────────
+    content_type = response.headers.get("content-type", "").lower()
+    if content_type and not any(t in content_type for t in ("text/", "html", "xml", "json")):
+        raise ValueError(
+            f"URL returned non-HTML content (`{content_type.split(';')[0].strip()}`). "
+            "Only web pages can be scraped."
+        )
 
-    return response.text
+    # ── Binary content guard ──────────────────────────────────────────────────
+    # Sample the first 2 000 raw bytes; if >15% are non-printable the page is
+    # binary/encrypted/obfuscated and will produce garbage when decoded as text.
+    raw_bytes = response.content
+    sample = raw_bytes[:2000]
+    if sample:
+        non_printable = sum(
+            1 for b in sample
+            if b < 9 or (13 < b < 32) or b == 127
+        )
+        if non_printable / len(sample) > 0.15:
+            raise ValueError(
+                "This page appears to contain binary or encrypted content and cannot be "
+                "scraped as text. It may be login-gated, heavily obfuscated, or a "
+                "non-HTML file (PDF, binary, etc.)."
+            )
+
+    # ── Encoding detection ────────────────────────────────────────────────────
+    # Only trust apparent_encoding when the server hasn't declared one, or when
+    # it defaults to the Latin-1 catch-all which is almost always wrong.
+    declared = (response.encoding or "").lower()
+    if not declared or declared == "iso-8859-1":
+        detected = response.apparent_encoding or "utf-8"
+        # Sanity-check: apparent_encoding on binary data sometimes returns
+        # bogus codecs; fall back to utf-8 with replacement in that case.
+        try:
+            raw_bytes.decode(detected, errors="strict")
+            response.encoding = detected
+        except (UnicodeDecodeError, LookupError):
+            response.encoding = "utf-8"
+
+    try:
+        return raw_bytes.decode(response.encoding, errors="replace")
+    except (LookupError, UnicodeDecodeError):
+        return raw_bytes.decode("utf-8", errors="replace")
 

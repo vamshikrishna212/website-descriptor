@@ -15,7 +15,7 @@ def clean_text(raw_text: str) -> str:
 
 
 def build_content(parsed: dict) -> str:
-    """Combine headings and paragraphs from a parsed page dict into one text block.
+    """Combine all extracted content from a parsed page dict into one text block.
 
     The returned string is clean, structured prose suitable for feeding to an LLM.
     """
@@ -32,6 +32,20 @@ def build_content(parsed: dict) -> str:
 
     if parsed.get("paragraphs"):
         parts.append("CONTENT:\n" + "\n\n".join(parsed["paragraphs"]))
+
+    if parsed.get("list_groups"):
+        lists_text = []
+        for group in parsed["list_groups"]:
+            lists_text.append("\n".join(f"- {item}" for item in group))
+        parts.append("LISTS:\n" + "\n\n".join(lists_text))
+
+    if parsed.get("code_blocks"):
+        blocks_text = []
+        for i, block in enumerate(parsed["code_blocks"], 1):
+            # Truncate each individual code block to avoid blowing the context
+            truncated = block[:800] + "\n... (truncated)" if len(block) > 800 else block
+            blocks_text.append(f"[Code Block {i}]\n{truncated}")
+        parts.append("CODE EXAMPLES:\n" + "\n\n".join(blocks_text))
 
     combined = "\n\n".join(parts)
     return clean_text(combined)
