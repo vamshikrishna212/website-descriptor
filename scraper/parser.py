@@ -88,6 +88,63 @@ def parse_page(html: str, url: str) -> dict:
         if text and len(text) > 10:
             code_blocks.append(text)
 
+    # ── Tables ───────────────────────────────────────────────────────────────
+    tables: list[dict] = []
+    for table in soup.find_all("table"):
+        # Extract header row from <thead> or first <tr> with <th> elements
+        headers: list[str] = []
+        thead = table.find("thead")
+        if thead:
+            headers = [
+                th.get_text(separator=" ", strip=True)
+                for th in thead.find_all(["th", "td"])
+            ]
+        else:
+            first_row = table.find("tr")
+            if first_row and first_row.find("th"):
+                headers = [
+                    th.get_text(separator=" ", strip=True)
+                    for th in first_row.find_all(["th", "td"])
+                ]
+
+        # Extract data rows from <tbody> or all <tr>s
+        rows: list[list[str]] = []
+        tbody = table.find("tbody") or table
+        for tr in tbody.find_all("tr"):
+            cells = [
+                td.get_text(separator=" ", strip=True)
+                for td in tr.find_all(["td", "th"])
+            ]
+            if any(c for c in cells):  # skip fully empty rows
+                rows.append(cells)
+
+        if headers or rows:
+            tables.append({"headers": headers, "rows": rows})
+
+    # ── Span-based key facts (labeled info outside normal content flow) ────────
+    # Collect spans whose parent is NOT an already-captured element type,
+    # grouping by parent container to avoid duplicating fragmented spans.
+    _CAPTURED_ANCESTORS = {
+        "p", "li", "pre", "h1", "h2", "h3", "h4", "h5", "h6",
+        "td", "th", "a", "label",
+    }
+    span_facts: list[str] = []
+    seen_containers: set[int] = set()
+    paragraph_texts = set(paragraphs)
+
+    for span in soup.find_all("span"):
+        # Skip spans nested inside already-captured element types
+        if any(ancestor.name in _CAPTURED_ANCESTORS for ancestor in span.parents):
+            continue
+        container = span.parent
+        if container is None or id(container) in seen_containers:
+            continue
+        seen_containers.add(id(container))
+        text = container.get_text(separator=" ", strip=True)
+        # Keep only meaningful content not already captured as a paragraph
+        if len(text) > 20 and text not in paragraph_texts:
+            span_facts.append(text)
+
     # ── Links ─────────────────────────────────────────────────────────────────
     links: list[dict] = []
     seen_hrefs: set[str] = set()
@@ -123,6 +180,8 @@ def parse_page(html: str, url: str) -> dict:
         "paragraphs": paragraphs,
         "list_groups": list_groups,
         "code_blocks": code_blocks,
+        "tables": tables,
+        "span_facts": span_facts,
         "links": links,
         "images": images,
         "meta": meta,
